@@ -1,18 +1,33 @@
 use std::time::Duration;
 
+use clap::Parser;
 use serde_json::Value;
 use tokio::time;
 
+#[derive(clap::Parser, Debug)]
+#[command(author, version, about)]
+struct Cli {
+    /// Интервал проверки в секундах (по умолчанию 60)
+    #[arg(short, long, default_value_t = 60)]
+    interval: u64,
+}
+
 const URL : &str = "https://valorant.secure.dyn.riotcdn.net/channels/public/x/status/eu.json";
+
 #[tokio::main]
 async fn main() {
+	let args = Cli::parse();
+	
+	const MIN_SECS_INTERVAL : u64 = 5;
+	let interval_secs = args.interval.max(MIN_SECS_INTERVAL);
+
 	// Переиспользуем клиент для оптимизации TCP/TLS-соединений
     let client = reqwest::Client::new();
 
     // Настраиваем интервал на 60 секунд
-    let mut ticker = time::interval(Duration::from_secs(60));
+    let mut ticker = time::interval(Duration::from_secs(interval_secs));
 
-    println!("Мониторинг запущен. Проверка каждые 60 секунд...\n");
+    println!("Мониторинг запущен. Проверка каждые {} секунд...\n", interval_secs);
 
     loop {
         // Первый тик срабатывает немедленно, последующие — ровно через минуту
@@ -21,7 +36,7 @@ async fn main() {
         match fetch_status(&client).await {
             Ok(json) => {
                 if let Some(critical_msg) = check_critical_incident(&json) {
-                    eprintln!("\n🚨 КРИТИЧЕСКИЙ СБОЙ ОБНАРУЖЕН! Следующая проверка через 60 сек.");
+                    eprintln!("\n[{}]🚨 КРИТИЧЕСКИЙ СБОЙ ОБНАРУЖЕН! Следующая проверка через {} сек.", current_timestamp(), interval_secs);
                     eprintln!("{}", critical_msg);
                 } else {
 					println!("[{}] Серверы в норме. Можно играть", current_timestamp());
@@ -30,7 +45,7 @@ async fn main() {
             }
             Err(err) => {
                 // Если произошел временный сбой сети, логируем и ждем следующей минуты
-                eprintln!("[{}] Ошибка сети при опросе API: {}. Повтор через минуту.", current_timestamp(), err);
+                eprintln!("[{}] Ошибка сети при опросе API: {}. Повтор через {} секунд.", current_timestamp(), err, interval_secs);
             }
         }
     }
@@ -68,7 +83,13 @@ fn current_timestamp() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    format!("timestamp: {}", now)
+
+	let secs_of_day = now % 86400;
+    let hours = secs_of_day / 3600;
+    let minutes = (secs_of_day % 3600) / 60;
+    let seconds = secs_of_day % 60;
+
+    format!("{:02}:{:02}:{:02} UTC", hours, minutes, seconds)
 }
 fn get_locale_text<'a>(items: &'a [Value], target_locale: &str) -> Option<&'a str> {
     for item in items {
